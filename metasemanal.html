@@ -35,9 +35,56 @@ const DIAS = ["Lun", "Mar", "Mié", "Jue", "Vie", "Sáb", "Dom"];
 const eur = (n) =>
   n.toLocaleString("es-ES", { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + " €";
 
+// ── Fechas y licencia ──────────────────────────────────────────
+// Licencia PAR: descansa los días pares del mes y trabaja los impares (fin de semana).
+const MESES = ["ene", "feb", "mar", "abr", "may", "jun", "jul", "ago", "sep", "oct", "nov", "dic"];
+
+const isoDia = (d) => {
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const dd = String(d.getDate()).padStart(2, "0");
+  return y + "-" + m + "-" + dd;
+};
+const parseDia = (s) => {
+  const [y, m, dd] = s.split("-").map(Number);
+  return new Date(y, m - 1, dd);
+};
+// Lunes de la semana que contiene la fecha dada
+const lunesDeLaSemana = (fecha) => {
+  const d = new Date(fecha);
+  const dow = d.getDay();              // 0=Dom, 1=Lun ... 6=Sáb
+  const diff = dow === 0 ? -6 : 1 - dow;
+  d.setDate(d.getDate() + diff);
+  d.setHours(0, 0, 0, 0);
+  return d;
+};
+// Las 7 fechas (Lun..Dom) a partir del lunes
+const fechasSemana = (lunes) =>
+  Array.from({ length: 7 }, (_, i) => {
+    const d = new Date(lunes);
+    d.setDate(lunes.getDate() + i);
+    return d;
+  });
+// Días activos por defecto según la fecha: Lun descanso, Mar-Vie trabajo,
+// Sáb/Dom según licencia par (trabaja días impares del mes)
+const autoActivo = (fechas) =>
+  fechas.map((d, i) => {
+    if (i === 0) return false;          // Lunes: descanso obligatorio
+    if (i <= 4) return true;            // Martes a Viernes: oficiales
+    return d.getDate() % 2 === 1;       // Sáb/Dom: impar → trabaja, par → descansa
+  });
+const rangoSemana = (fechas) => {
+  const ini = fechas[0], fin = fechas[6];
+  if (ini.getMonth() === fin.getMonth())
+    return ini.getDate() + "–" + fin.getDate() + " " + MESES[fin.getMonth()];
+  return ini.getDate() + " " + MESES[ini.getMonth()] + " – " + fin.getDate() + " " + MESES[fin.getMonth()];
+};
+
 function MetaSemanal() {
-  // Por defecto: Lunes descanso (off), Martes a Viernes oficiales (on), Sáb/Dom opcionales (off)
-  const [activo, setActivo] = useState([false, true, true, true, true, false, false]);
+  // Semana actual (lunes de la semana que toca) y días marcados según la fecha
+  const lunesHoy = lunesDeLaSemana(new Date());
+  const [semanaInicio, setSemanaInicio] = useState(lunesHoy);
+  const [activo, setActivo] = useState(autoActivo(fechasSemana(lunesHoy)));
   const [valores, setValores] = useState(["", "", "", "", "", "", ""]);
   const [historico, setHistorico] = useState([]);
 
@@ -46,22 +93,36 @@ function MetaSemanal() {
   const [editActivo, setEditActivo] = useState([false, true, true, true, true, false, false]);
   const [editValores, setEditValores] = useState(["", "", "", "", "", "", ""]);
 
+  const fechas = useMemo(() => fechasSemana(semanaInicio), [semanaInicio]);
+
   // Guardado automático en el propio navegador
   useEffect(() => {
+    const hoyLunes = lunesDeLaSemana(new Date());
+    const hoyLunesISO = isoDia(hoyLunes);
     try {
       const g = localStorage.getItem("tn360_meta");
       if (g) {
         const d = JSON.parse(g);
-        if (d.activo) setActivo(d.activo);
-        if (d.valores) setValores(d.valores);
+        const tieneDatos = d.valores && d.valores.some((v) => v && v !== "");
+        if (d.semanaInicio === hoyLunesISO || tieneDatos) {
+          // Misma semana, o una semana anterior con datos sin cerrar: la mantenemos tal cual
+          if (d.semanaInicio) setSemanaInicio(parseDia(d.semanaInicio));
+          if (d.activo) setActivo(d.activo);
+          if (d.valores) setValores(d.valores);
+        } else {
+          // Semana nueva sin nada pendiente: empezar limpia con los días marcados por fecha
+          setSemanaInicio(hoyLunes);
+          setActivo(autoActivo(fechasSemana(hoyLunes)));
+          setValores(["", "", "", "", "", "", ""]);
+        }
       }
       const h = localStorage.getItem("tn360_hist");
       if (h) setHistorico(JSON.parse(h));
     } catch (e) {}
   }, []);
   useEffect(() => {
-    try { localStorage.setItem("tn360_meta", JSON.stringify({ activo, valores })); } catch (e) {}
-  }, [activo, valores]);
+    try { localStorage.setItem("tn360_meta", JSON.stringify({ semanaInicio: isoDia(semanaInicio), activo, valores })); } catch (e) {}
+  }, [semanaInicio, activo, valores]);
   useEffect(() => {
     try { localStorage.setItem("tn360_hist", JSON.stringify(historico)); } catch (e) {}
   }, [historico]);
@@ -86,6 +147,8 @@ function MetaSemanal() {
     const registro = {
       id: Date.now(),
       fecha: new Date().toLocaleDateString("es-ES", { day: "2-digit", month: "2-digit", year: "numeric" }),
+      semanaInicio: isoDia(semanaInicio),
+      rango: rangoSemana(fechas),
       valores: [...valores],
       activo: [...activo],
       total,
@@ -94,6 +157,10 @@ function MetaSemanal() {
       llega,
     };
     setHistorico([registro, ...historico]);
+    // Tras cerrar, saltar a la semana actual con los días marcados por fecha
+    const hoyLunes = lunesDeLaSemana(new Date());
+    setSemanaInicio(hoyLunes);
+    setActivo(autoActivo(fechasSemana(hoyLunes)));
     setValores(["", "", "", "", "", "", ""]);
   };
   const borrarSemana = (id) => {
@@ -173,6 +240,7 @@ function MetaSemanal() {
             Llega a <b style={{ color: "#FFD400" }}>{eur(UMBRAL)}</b> y cobras el{" "}
             <b style={{ color: "#FFD400" }}>45%</b>. Por debajo, el 40%.
           </p>
+          <div style={S.semanaChip}>📅 Semana {rangoSemana(fechas)}</div>
         </div>
 
         <div style={S.ringZone}>
@@ -211,7 +279,8 @@ function MetaSemanal() {
               <button onClick={() => toggleDia(i)}
                 style={{ ...S.diaTag, opacity: activo[i] ? 1 : 0.35,
                          borderColor: activo[i] ? "#FFD400" : "#444" }}>
-                {d}
+                <span>{d}</span>
+                <span style={S.diaNum}>{fechas[i].getDate()}</span>
               </button>
               <div style={S.inputWrap}>
                 <input inputMode="decimal" disabled={!activo[i]} value={valores[i]}
@@ -223,17 +292,10 @@ function MetaSemanal() {
             </div>
           ))}
         </div>
-        <p style={S.hint}>Toca un día para marcarlo como libre. Trabajas {calc.diasActivos} días.</p>
-
-        <button onClick={() => toggleDia(5)}
-          style={{ ...S.sexto, borderColor: activo[5] ? "#FFD400" : "#2a2a2a",
-                   background: activo[5] ? "#2a2410" : "#0a0a0a" }}>
-          <span style={S.sextoLbl}>{activo[5] ? "✓ " : "+ "}Sábado (día extra)</span>
-          <span style={S.sextoSub}>
-            {activo[5] ? "Repartido a " + eur(calc.mediaObjetivoInicial) + "/día"
-                       : "Añade un día extra y baja tu objetivo diario"}
-          </span>
-        </button>
+        <p style={S.hint}>
+          Lunes descanso y el finde se marca solo según tu licencia (par: trabajas días impares).
+          Toca cualquier día para cambiarlo a mano. Trabajas {calc.diasActivos} días.
+        </p>
 
         <div style={S.tramos}>
           <div style={S.tramoBox}>
@@ -268,7 +330,7 @@ function MetaSemanal() {
                   </div>
                   <div style={S.histInfo}>
                     <div style={S.histTotal}>{eur(s.total)} facturado</div>
-                    <div style={S.histSub}>{s.fecha} · ganaste {eur(s.ganancia)}</div>
+                    <div style={S.histSub}>{s.rango ? "Semana " + s.rango : s.fecha} · ganaste {eur(s.ganancia)}</div>
                   </div>
                   <button onClick={() => editId === s.id ? cancelarEdicion() : abrirEdicion(s)}
                     style={S.histEdit} title="Editar semana">
@@ -276,15 +338,18 @@ function MetaSemanal() {
                   </button>
                   <button onClick={() => borrarSemana(s.id)} style={S.histDel}>×</button>
                 </div>
-                {editId === s.id && (
+                {editId === s.id && (() => {
+                  const fechasEdit = s.semanaInicio ? fechasSemana(parseDia(s.semanaInicio)) : null;
+                  return (
                   <div style={S.editBox}>
-                    <div style={S.editTitle}>Editar semana del {s.fecha}</div>
+                    <div style={S.editTitle}>Editar semana {s.rango || ("del " + s.fecha)}</div>
                     {DIAS.map((d, i) => (
                       <div key={d} style={S.diaRow}>
                         <button onClick={() => toggleEditDia(i)}
                           style={{ ...S.diaTag, opacity: editActivo[i] ? 1 : 0.35,
                                    borderColor: editActivo[i] ? "#FFD400" : "#444" }}>
-                          {d}
+                          <span>{d}</span>
+                          {fechasEdit && <span style={S.diaNum}>{fechasEdit[i].getDate()}</span>}
                         </button>
                         <div style={S.inputWrap}>
                           <input inputMode="decimal" disabled={!editActivo[i]} value={editValores[i]}
@@ -300,7 +365,8 @@ function MetaSemanal() {
                       <button onClick={() => guardarEdicion(s)} style={S.editSave}>Guardar cambios</button>
                     </div>
                   </div>
-                )}
+                  );
+                })()}
               </div>
             ))}
             {(() => {
@@ -345,6 +411,9 @@ const S = {
   brand: { color: "#FFD400", fontWeight: 700, fontSize: 13, letterSpacing: 1, textTransform: "uppercase" },
   h1: { color: "#fff", fontSize: 30, margin: "0 0 6px", fontWeight: 800, letterSpacing: -0.5 },
   sub: { color: "#999", fontSize: 14, margin: 0, lineHeight: 1.5 },
+  semanaChip: { display: "inline-block", marginTop: 12, padding: "6px 12px", borderRadius: 999,
+                background: "#1a1a1a", border: "1px solid #2a2a2a", color: "#FFD400",
+                fontSize: 13, fontWeight: 700 },
   ringZone: { position: "relative", display: "flex", justifyContent: "center", margin: "8px 0 20px" },
   ringCenter: { position: "absolute", top: "50%", left: "50%", transform: "translate(-50%,-50%)", textAlign: "center" },
   ringTotal: { color: "#fff", fontSize: 28, fontWeight: 800, letterSpacing: -0.5 },
@@ -360,8 +429,10 @@ const S = {
   objVal: { color: "#FFD400", fontSize: 26, fontWeight: 800, letterSpacing: -0.5 },
   dias: { display: "flex", flexDirection: "column", gap: 10 },
   diaRow: { display: "flex", alignItems: "center", gap: 12 },
-  diaTag: { width: 56, padding: "10px 0", borderRadius: 10, background: "#0a0a0a",
-            color: "#fff", border: "1.5px solid", fontWeight: 700, fontSize: 14, cursor: "pointer" },
+  diaTag: { width: 56, padding: "8px 0", borderRadius: 10, background: "#0a0a0a",
+            color: "#fff", border: "1.5px solid", fontWeight: 700, fontSize: 14, cursor: "pointer",
+            display: "flex", flexDirection: "column", alignItems: "center", gap: 1, lineHeight: 1.1 },
+  diaNum: { fontSize: 11, fontWeight: 600, color: "#888" },
   inputWrap: { flex: 1, position: "relative" },
   input: { width: "100%", boxSizing: "border-box", padding: "12px 32px 12px 14px",
            borderRadius: 10, background: "#0a0a0a", border: "1px solid #2a2a2a",
