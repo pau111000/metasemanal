@@ -1,0 +1,396 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>TaxiNeto360 · Meta semanal</title>
+<style>
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; }
+  body {
+    background: #0a0a0a;
+    font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+    -webkit-tap-highlight-color: transparent;
+  }
+  input { font-family: inherit; }
+  button { font-family: inherit; }
+</style>
+</head>
+<body>
+<div id="root"></div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.2/babel.min.js"></script>
+
+<script type="text/babel">
+const { useState, useMemo, useEffect } = React;
+
+// ── Lógica de negocio ──────────────────────────────────────────
+const UMBRAL = 1400;        // € semanales para acceder al 45%
+const PCT_ALTO = 0.45;
+const PCT_BAJO = 0.40;
+const DIAS = ["Lun", "Mar", "Mié", "Jue", "Vie", "Sáb", "Dom"];
+
+const eur = (n) =>
+  n.toLocaleString("es-ES", { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + " €";
+
+function MetaSemanal() {
+  const [activo, setActivo] = useState([true, true, true, true, true, false, false]);
+  const [valores, setValores] = useState(["", "", "", "", "", "", ""]);
+  const [historico, setHistorico] = useState([]);
+
+  // Guardado automático en el propio navegador
+  useEffect(() => {
+    try {
+      const g = localStorage.getItem("tn360_meta");
+      if (g) {
+        const d = JSON.parse(g);
+        if (d.activo) setActivo(d.activo);
+        if (d.valores) setValores(d.valores);
+      }
+      const h = localStorage.getItem("tn360_hist");
+      if (h) setHistorico(JSON.parse(h));
+    } catch (e) {}
+  }, []);
+  useEffect(() => {
+    try { localStorage.setItem("tn360_meta", JSON.stringify({ activo, valores })); } catch (e) {}
+  }, [activo, valores]);
+  useEffect(() => {
+    try { localStorage.setItem("tn360_hist", JSON.stringify(historico)); } catch (e) {}
+  }, [historico]);
+
+  const set = (i, v) => {
+    const copia = [...valores];
+    copia[i] = v.replace(",", ".");
+    setValores(copia);
+  };
+  const toggleDia = (i) => {
+    const copia = [...activo];
+    copia[i] = !copia[i];
+    setActivo(copia);
+    if (copia[i] === false) set(i, "");
+  };
+  const cerrarSemana = () => {
+    const nums = valores.map((v) => parseFloat(v) || 0);
+    const total = nums.reduce((a, b) => a + b, 0);
+    if (total <= 0) { setValores(["", "", "", "", "", "", ""]); return; }
+    const llega = total >= UMBRAL;
+    const pct = llega ? PCT_ALTO : PCT_BAJO;
+    const registro = {
+      id: Date.now(),
+      fecha: new Date().toLocaleDateString("es-ES", { day: "2-digit", month: "2-digit", year: "numeric" }),
+      total,
+      pct: pct * 100,
+      ganancia: total * pct,
+      llega,
+    };
+    setHistorico([registro, ...historico]);
+    setValores(["", "", "", "", "", "", ""]);
+  };
+  const borrarSemana = (id) => setHistorico(historico.filter((s) => s.id !== id));
+
+  const calc = useMemo(() => {
+    const nums = valores.map((v) => parseFloat(v) || 0);
+    const total = nums.reduce((a, b) => a + b, 0);
+    const diasActivos = activo.filter(Boolean).length || 5;
+    const diasConDato = activo.filter((a, i) => a && valores[i] !== "").length;
+    const diasRestantes = Math.max(diasActivos - diasConDato, 0);
+    const falta = Math.max(UMBRAL - total, 0);
+    const llega = total >= UMBRAL;
+    const mediaNecesaria = diasRestantes > 0 ? falta / diasRestantes : 0;
+    const mediaObjetivoInicial = UMBRAL / diasActivos;
+    const gananciaSiLlega = Math.max(total, UMBRAL) * PCT_ALTO;
+    const gananciaSiNoLlega = total * PCT_BAJO;
+    const ganancia = llega ? total * PCT_ALTO : total * PCT_BAJO;
+    const penalizacion = UMBRAL * PCT_ALTO - UMBRAL * PCT_BAJO;
+    return { total, falta, llega, ganancia, diasRestantes, mediaNecesaria,
+             mediaObjetivoInicial, gananciaSiLlega, gananciaSiNoLlega, penalizacion, diasActivos };
+  }, [valores, activo]);
+
+  const progreso = Math.min((calc.total / UMBRAL) * 100, 100);
+
+  return (
+    <div style={S.wrap}>
+      <div style={S.card}>
+        <div style={S.head}>
+          <div style={S.brandRow}>
+            <span style={S.dot}></span>
+            <span style={S.brand}>TaxiNeto360</span>
+          </div>
+          <h1 style={S.h1}>Meta semanal</h1>
+          <p style={S.sub}>
+            Llega a <b style={{ color: "#FFD400" }}>{eur(UMBRAL)}</b> y cobras el{" "}
+            <b style={{ color: "#FFD400" }}>45%</b>. Por debajo, el 40%.
+          </p>
+        </div>
+
+        <div style={S.ringZone}>
+          <Ring pct={progreso} llega={calc.llega} />
+          <div style={S.ringCenter}>
+            <div style={S.ringTotal}>{eur(calc.total)}</div>
+            <div style={S.ringLabel}>de {eur(UMBRAL)}</div>
+          </div>
+        </div>
+
+        <div style={S.objetivo}>
+          <div style={S.objLeft}>
+            <div style={S.objLabel}>Objetivo por día</div>
+            <div style={S.objSub}>para llegar al 45% en {calc.diasActivos} días</div>
+          </div>
+          <div style={S.objVal}>{eur(calc.mediaObjetivoInicial)}</div>
+        </div>
+
+        <div style={{ ...S.estado, background: calc.llega ? "#13301a" : "#2a2410",
+                      borderColor: calc.llega ? "#2e7d32" : "#FFD400" }}>
+          {calc.llega ? (
+            <span>✓ Dentro del <b>45%</b> — llevas ganados <b>{eur(calc.ganancia)}</b></span>
+          ) : calc.diasRestantes > 0 ? (
+            <span>
+              Te faltan <b style={{ color: "#FFD400" }}>{eur(calc.falta)}</b> · haz{" "}
+              <b style={{ color: "#FFD400" }}>{eur(calc.mediaNecesaria)}/día</b> en los {calc.diasRestantes} días que quedan
+            </span>
+          ) : (
+            <span>Cerrada por debajo del umbral — cobras el <b>40%</b> ({eur(calc.gananciaSiNoLlega)})</span>
+          )}
+        </div>
+
+        <div style={S.dias}>
+          {DIAS.map((d, i) => (
+            <div key={d} style={S.diaRow}>
+              <button onClick={() => toggleDia(i)}
+                style={{ ...S.diaTag, opacity: activo[i] ? 1 : 0.35,
+                         borderColor: activo[i] ? "#FFD400" : "#444" }}>
+                {d}
+              </button>
+              <div style={S.inputWrap}>
+                <input inputMode="decimal" disabled={!activo[i]} value={valores[i]}
+                  onChange={(e) => set(i, e.target.value)}
+                  placeholder={activo[i] ? "0,00" : "libre"}
+                  style={{ ...S.input, opacity: activo[i] ? 1 : 0.3 }} />
+                <span style={S.eurMark}>€</span>
+              </div>
+            </div>
+          ))}
+        </div>
+        <p style={S.hint}>Toca un día para marcarlo como libre. Trabajas {calc.diasActivos} días.</p>
+
+        <button onClick={() => toggleDia(5)}
+          style={{ ...S.sexto, borderColor: activo[5] ? "#FFD400" : "#2a2a2a",
+                   background: activo[5] ? "#2a2410" : "#0a0a0a" }}>
+          <span style={S.sextoLbl}>{activo[5] ? "✓ " : "+ "}6º día (sábado)</span>
+          <span style={S.sextoSub}>
+            {activo[5] ? "Repartido a " + eur(calc.mediaObjetivoInicial) + "/día"
+                       : "Añade un día extra y baja tu objetivo diario"}
+          </span>
+        </button>
+
+        <div style={S.tramos}>
+          <div style={S.tramoBox}>
+            <div style={S.tramoPct}>45%</div>
+            <div style={S.tramoVal}>{eur(calc.gananciaSiLlega)}</div>
+            <div style={S.tramoLbl}>si llegas a 1.400</div>
+          </div>
+          <div style={S.tramoVs}>vs</div>
+          <div style={S.tramoBox}>
+            <div style={{ ...S.tramoPct, color: "#888" }}>40%</div>
+            <div style={{ ...S.tramoVal, color: "#888" }}>{eur(calc.gananciaSiNoLlega)}</div>
+            <div style={S.tramoLbl}>si te quedas corta</div>
+          </div>
+        </div>
+        <div style={S.penal}>
+          Quedarte por debajo te cuesta <b style={{ color: "#FF6B6B" }}>{eur(calc.penalizacion)}</b> del salto de tramo
+        </div>
+
+        <button onClick={cerrarSemana} style={S.reset}>Cerrar semana y guardar</button>
+
+        {historico.length > 0 && (
+          <div style={S.histZone}>
+            <div style={S.histTitle}>Historial de semanas</div>
+            {historico.map((s) => (
+              <div key={s.id} style={S.histRow}>
+                <div style={{ ...S.histPctTag,
+                     background: s.llega ? "#13301a" : "#2a2410",
+                     color: s.llega ? "#3ddc84" : "#FFD400",
+                     borderColor: s.llega ? "#2e7d32" : "#FFD400" }}>
+                  {s.pct}%
+                </div>
+                <div style={S.histInfo}>
+                  <div style={S.histTotal}>{eur(s.total)} facturado</div>
+                  <div style={S.histSub}>{s.fecha} · ganaste {eur(s.ganancia)}</div>
+                </div>
+                <button onClick={() => borrarSemana(s.id)} style={S.histDel}>×</button>
+              </div>
+            ))}
+            {(() => {
+              const n = historico.length;
+              const con45 = historico.filter((s) => s.llega).length;
+              const totalGanado = historico.reduce((a, s) => a + s.ganancia, 0);
+              return (
+                <div style={S.histResumen}>
+                  {con45} de {n} semanas al 45% · total ganado <b style={{ color: "#FFD400" }}>{eur(totalGanado)}</b>
+                </div>
+              );
+            })()}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function Ring({ pct, llega }) {
+  const r = 88, c = 2 * Math.PI * r;
+  const off = c - (pct / 100) * c;
+  return (
+    <svg width="208" height="208" style={{ transform: "rotate(-90deg)" }}>
+      <circle cx="104" cy="104" r={r} fill="none" stroke="#222" strokeWidth="14" />
+      <circle cx="104" cy="104" r={r} fill="none"
+        stroke={llega ? "#3ddc84" : "#FFD400"} strokeWidth="14" strokeLinecap="round"
+        strokeDasharray={c} strokeDashoffset={off}
+        style={{ transition: "stroke-dashoffset .6s ease, stroke .3s" }} />
+    </svg>
+  );
+}
+
+const S = {
+  wrap: { minHeight: "100vh", display: "flex", justifyContent: "center",
+          alignItems: "flex-start", padding: "24px 16px" },
+  card: { width: "100%", maxWidth: 440, background: "#111", borderRadius: 24,
+          padding: 24, border: "1px solid #1f1f1f" },
+  head: { marginBottom: 20 },
+  brandRow: { display: "flex", alignItems: "center", gap: 8, marginBottom: 14 },
+  dot: { width: 10, height: 10, borderRadius: 3, background: "#FFD400" },
+  brand: { color: "#FFD400", fontWeight: 700, fontSize: 13, letterSpacing: 1, textTransform: "uppercase" },
+  h1: { color: "#fff", fontSize: 30, margin: "0 0 6px", fontWeight: 800, letterSpacing: -0.5 },
+  sub: { color: "#999", fontSize: 14, margin: 0, lineHeight: 1.5 },
+  ringZone: { position: "relative", display: "flex", justifyContent: "center", margin: "8px 0 20px" },
+  ringCenter: { position: "absolute", top: "50%", left: "50%", transform: "translate(-50%,-50%)", textAlign: "center" },
+  ringTotal: { color: "#fff", fontSize: 28, fontWeight: 800, letterSpacing: -0.5 },
+  ringLabel: { color: "#777", fontSize: 13, marginTop: 2 },
+  estado: { borderRadius: 14, padding: "14px 16px", color: "#fff", fontSize: 14,
+            lineHeight: 1.5, border: "1px solid", marginBottom: 22 },
+  objetivo: { display: "flex", alignItems: "center", justifyContent: "space-between",
+              background: "#0a0a0a", border: "1px solid #2a2a2a", borderRadius: 14,
+              padding: "14px 18px", marginBottom: 12 },
+  objLeft: { display: "flex", flexDirection: "column" },
+  objLabel: { color: "#fff", fontSize: 15, fontWeight: 700 },
+  objSub: { color: "#777", fontSize: 12, marginTop: 2 },
+  objVal: { color: "#FFD400", fontSize: 26, fontWeight: 800, letterSpacing: -0.5 },
+  dias: { display: "flex", flexDirection: "column", gap: 10 },
+  diaRow: { display: "flex", alignItems: "center", gap: 12 },
+  diaTag: { width: 56, padding: "10px 0", borderRadius: 10, background: "#0a0a0a",
+            color: "#fff", border: "1.5px solid", fontWeight: 700, fontSize: 14, cursor: "pointer" },
+  inputWrap: { flex: 1, position: "relative" },
+  input: { width: "100%", boxSizing: "border-box", padding: "12px 32px 12px 14px",
+           borderRadius: 10, background: "#0a0a0a", border: "1px solid #2a2a2a",
+           color: "#fff", fontSize: 17, fontWeight: 600, outline: "none" },
+  eurMark: { position: "absolute", right: 14, top: "50%", transform: "translateY(-50%)",
+             color: "#666", fontSize: 15, fontWeight: 600 },
+  hint: { color: "#666", fontSize: 12, margin: "10px 2px 14px" },
+  sexto: { width: "100%", boxSizing: "border-box", display: "flex", flexDirection: "column",
+           alignItems: "flex-start", gap: 3, padding: "13px 16px", borderRadius: 12,
+           border: "1.5px solid", cursor: "pointer", marginBottom: 22, textAlign: "left" },
+  sextoLbl: { color: "#fff", fontSize: 15, fontWeight: 700 },
+  sextoSub: { color: "#999", fontSize: 12 },
+  tramos: { display: "flex", alignItems: "center", gap: 12, marginBottom: 12 },
+  tramoBox: { flex: 1, background: "#0a0a0a", borderRadius: 14, padding: "16px 12px",
+              textAlign: "center", border: "1px solid #1f1f1f" },
+  tramoPct: { color: "#FFD400", fontSize: 22, fontWeight: 800 },
+  tramoVal: { color: "#fff", fontSize: 18, fontWeight: 700, marginTop: 4 },
+  tramoLbl: { color: "#777", fontSize: 11, marginTop: 4 },
+  tramoVs: { color: "#555", fontSize: 13, fontWeight: 600 },
+  penal: { textAlign: "center", color: "#999", fontSize: 13, lineHeight: 1.4 },
+  reset: { width: "100%", marginTop: 20, padding: "12px", borderRadius: 10,
+           background: "transparent", border: "1px solid #2a2a2a", color: "#aaa",
+           fontSize: 13, fontWeight: 600, cursor: "pointer" },
+  histZone: { marginTop: 24, borderTop: "1px solid #1f1f1f", paddingTop: 20 },
+  histTitle: { color: "#fff", fontSize: 15, fontWeight: 700, marginBottom: 14 },
+  histRow: { display: "flex", alignItems: "center", gap: 12, marginBottom: 10 },
+  histPctTag: { minWidth: 52, textAlign: "center", padding: "8px 0", borderRadius: 9,
+                border: "1px solid", fontWeight: 800, fontSize: 14 },
+  histInfo: { flex: 1 },
+  histTotal: { color: "#fff", fontSize: 14, fontWeight: 600 },
+  histSub: { color: "#777", fontSize: 12, marginTop: 2 },
+  histDel: { background: "transparent", border: "none", color: "#555", fontSize: 22,
+             cursor: "pointer", lineHeight: 1, padding: "0 4px" },
+  histResumen: { marginTop: 12, padding: "12px 14px", background: "#0a0a0a",
+                 borderRadius: 10, color: "#aaa", fontSize: 13, textAlign: "center" },
+};
+
+const PIN_CORRECTO = "0000";
+
+function Gate() {
+  const [desbloqueado, setDesbloqueado] = useState(false);
+  const [pin, setPin] = useState("");
+  const [error, setError] = useState(false);
+
+  const intentar = (valor) => {
+    if (valor === PIN_CORRECTO) {
+      setDesbloqueado(true);
+      setError(false);
+    } else {
+      setError(true);
+      setPin("");
+    }
+  };
+
+  const pulsar = (n) => {
+    if (pin.length >= 4) return;
+    const nuevo = pin + n;
+    setPin(nuevo);
+    setError(false);
+    if (nuevo.length === 4) setTimeout(() => intentar(nuevo), 150);
+  };
+  const borrar = () => { setPin(pin.slice(0, -1)); setError(false); };
+
+  if (desbloqueado) return <MetaSemanal />;
+
+  return (
+    <div style={S.wrap}>
+      <div style={{ ...S.card, maxWidth: 360, textAlign: "center" }}>
+        <div style={S.brandRow}>
+          <span style={S.dot}></span>
+          <span style={S.brand}>TaxiNeto360</span>
+        </div>
+        <h1 style={{ ...S.h1, fontSize: 24, marginTop: 16 }}>Introduce tu PIN</h1>
+        <p style={{ ...S.sub, marginBottom: 24 }}>Para ver tus cuentas</p>
+
+        <div style={G.dots}>
+          {[0, 1, 2, 3].map((i) => (
+            <span key={i} style={{ ...G.dotPin,
+              background: i < pin.length ? "#FFD400" : "transparent",
+              borderColor: error ? "#FF6B6B" : "#444" }} />
+          ))}
+        </div>
+        {error && <div style={G.err}>PIN incorrecto, prueba otra vez</div>}
+
+        <div style={G.teclado}>
+          {[1, 2, 3, 4, 5, 6, 7, 8, 9].map((n) => (
+            <button key={n} onClick={() => pulsar(String(n))} style={G.tecla}>{n}</button>
+          ))}
+          <span></span>
+          <button onClick={() => pulsar("0")} style={G.tecla}>0</button>
+          <button onClick={borrar} style={{ ...G.tecla, fontSize: 20 }}>⌫</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+const G = {
+  dots: { display: "flex", justifyContent: "center", gap: 16, marginBottom: 14 },
+  dotPin: { width: 16, height: 16, borderRadius: "50%", border: "2px solid",
+            display: "inline-block", transition: "background .15s" },
+  err: { color: "#FF6B6B", fontSize: 13, marginBottom: 14 },
+  teclado: { display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 14,
+             marginTop: 20, maxWidth: 240, marginLeft: "auto", marginRight: "auto" },
+  tecla: { aspectRatio: "1", borderRadius: "50%", background: "#0a0a0a",
+           border: "1px solid #2a2a2a", color: "#fff", fontSize: 24, fontWeight: 600,
+           cursor: "pointer", minHeight: 64 },
+};
+
+ReactDOM.createRoot(document.getElementById("root")).render(<Gate />);
+</script>
+</body>
+</html>
